@@ -1,0 +1,200 @@
+--*****************************************************READ ME************************************************
+
+---Modeling of the Water Level Control System (WLCS)--a benchmark hybrid system
+---The goal is to keep the water level (ws) between the lower desired limit (30) and the upper desired limit (60)
+---Assumptions:
+	-- 1) if the inflow valve is on at a particular time (t), water inflow is greater than water outflow
+	-- 2) At the start the water level is greater than 60 but less than 61, so that Assertion Turn_Off is true 
+	
+	
+--*************************************************************************************************************	
+package wlcs_2
+public
+with wlcs_properties, wlcs_types;
+
+system WLCS
+end WLCS;
+
+system implementation WLCS.impl
+	
+subcomponents
+Actuator : device Actuator.impl;
+Sensor : device Sensor.impl;
+Controller : process pController.impl;
+WaterTank : abstract WaterTank.impl;
+
+connections
+C2A : port Controller.cc -> Actuator.cc; --Controller to Actuator
+A2W : port Actuator.ac -> WaterTank.ac;  --Actuator to WaterTank
+W2S : port WaterTank.wl -> Sensor.wl;   -- WaterTank to Sensor
+S2C : port Sensor.sw -> Controller.sw;  --WaterTank to pController
+
+annex hybrid{**
+
+	invariant
+       << [ h >= 30] and [ h <= 60] >>
+	
+	behavior
+	WLCS::=  { pController || WaterTank}
+**};
+ 
+end WLCS.impl;
+ 
+	-------------------Controller Process-----------------
+process pController
+features
+sw : in data port wlcs_types::SensorValue ;
+cc : out event data port wlcs_types::on_off;
+end pController;
+
+process implementation pController.impl
+
+subcomponents
+Controller : thread Controller.impl;
+
+connections
+C1 :   port sw -> Controller.sw;
+C2 :   port Controller.cc -> cc;
+end pController.impl;
+
+
+--------Controller Thread with HA specification--------------	
+thread Controller
+features
+sw : in data port WLCS_Types::SensorValue; 
+cc : out event data port WLCS_Types::on_off ;
+
+properties
+Dispatch_Protocol => Hybrid;
+Period => 100 ms;
+end Controller;	
+
+thread implementation Controller.impl
+	annex hybrid {**
+			
+	assertion
+	<< Underflow: [h<=29] >>
+	<< Overflow:  [h>=61] >>
+	<< Turn_On :  [h<=30] >>
+	<< Turn_Off:  [h>=60] >>
+	<< Normal:    [h >= 30] and [h <= 60] >>
+	
+	assume
+	<< Turn_Off >>
+	
+	ensure
+	<< Normal or  Turn_On or Turn_Off>>
+	
+	invariant 
+	<< true >>
+	
+	variables 
+		cv : wlcs_types::on_off
+		h  : wlcs_types:: WaterLevel
+		t  : wlcs_types::Time
+		
+	constants
+		period  =  0.01 s //its time variable...Time unit must be allowed here
+		
+	behavior 
+		
+		START ::=  cv := Off & t := 0 & sw?(h) &
+				 ([h >= 60 ])-> DRAIN  &
+				 ([h >= 30] and [h < 60])-> FILL
+				  // if thread is aperiodic then [[> sw !(sw) ~> GetCmd]]>
+		
+		DRAIN ::= cc!(Off) & 'DT 1 t = 1' < [ t < period ] > CHECK_DRAIN // DRAIN is complete state, time evaluation is used for dispatch behavior
+		
+		CHECK_DRAIN ::= ([cv = Off] and (([h > 30] and [h < 60]) or [h >= 60])) -> DRAIN & 
+						([h <= 30]) ->  FILL &				
+						([h <= 29]) -> UNDER_FLOW
+		
+		FILL ::=     cc!(On) & cv:=On & 'DT 1 t = 1' < [ t < period ] > CHECK_FILL  
+		
+		CHECK_FILL ::= ([cv = On] and (([h > 30] and [h < 60]) or [h <=30])) -> FILL &
+		 				([h >= 60]) ->  DRAIN &
+		 				([h >= 61]) -> OVER_FLOW
+		
+		OVER_FLOW  ::= stop 
+		
+		UNDER_FLOW ::= stop
+	
+	**};
+
+end Controller.impl;
+
+------Water Tank with HA specification-------------
+
+abstract WaterTank
+features
+ac : in event data port WLCS_Types::ValveStatus;
+wl : out data port WLCS_Types::WaterLevel;
+end WaterTank;
+
+
+abstract implementation WaterTank.impl
+annex hybrid{**
+
+	assertion
+	<< Start: ([h>=60] and [h<=61]) and [v=1] >>
+	<< Normal: [h>=30] and [h<=30] >>
+
+	assume
+	<< pre >>
+	
+	ensure 
+	 << post >>
+	
+	invariant 
+		
+	<< true  >>
+	
+	variables
+ 	t : WLCS_Types::Time 
+	v : WLCS_Types::ValveStatus 
+ 	h : WLCS_Types::WaterLevel 
+ 	x : BLESS_Types::Time
+
+	constants
+	Qmax = 0.007 cmps, 
+	g	 = 9.8 mpss, 
+	pi   = 3.14,    
+	r    =  0.0254 m, 
+	u    =  1, 
+	period  =  0.01 s //its time variable...Time unit must be allowed here
+  
+
+	behavior  
+//	Move ::= <<SBL and DSPV2>> cs?s & cv?(v) <<SBL and DSPV2>>    ---for paper 2017
+	Plant ::=  t := 0 & 
+		 'DT 1 h = (v*Qmax) - (pi* (r^2)*1.414*(g^0.5)*(h^0.5)*u)' &
+		 'DT 1 v = 0' < [t < period ] > [[> wl!(h)~> GetCmd]]> 
+	GetCmd ::= cc?(v)
+	WaterTank ::= REPEAT (Plant)  
+
+**};
+
+end WaterTank.impl;
+
+-----------Actuator--------
+device Actuator
+features
+ cc : in event data port WLCS_Types::on_off;
+ ac : out event data port WLCS_Types::ValveStatus; 
+end actuator;
+
+device implementation actuator.impl
+end actuator.impl;
+	
+----------Sensor-------------
+device sensor
+features
+ wl : in data port WLCS_Types::WaterLevel;
+ sw : out data port WLCS_Types::SensorValue;
+end sensor;
+
+device implementation sensor.impl
+end sensor.impl;
+
+
+end wlcs_2;

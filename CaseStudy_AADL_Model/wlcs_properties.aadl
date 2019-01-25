@@ -1,0 +1,5 @@
+property set wlcs_properties is
+Tolerance : aadlreal => 0.5 applies to (all) ;
+Filling_Rate : aadlreal => 1.0 applies to (all);
+Draining_Rate : aadlreal => 1.0 applies to (all);
+end wlcs_properties;
